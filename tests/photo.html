@@ -1,0 +1,118 @@
+<!doctype html><meta charset="utf-8"><title>Artwork preview checks</title>
+<pre id="result">RUNNING</pre>
+<button id="finish-artwork">完成作品</button>
+<div id="photo-countdown" hidden></div>
+<p id="photo-notice"></p>
+<dialog id="photo-preview"><img id="photo-image" alt=""><button id="photo-retake">返回繪畫</button><a id="artwork-download" download="misty-artwork.png">下載圖片</a></dialog>
+<script type="module">
+import { isYaGesture, isOneGesture, YaHold, GesturePen } from '../gestures.js';
+import { ArtworkPreview } from '../photo.js';
+import { GlassWiping } from '../wiping.js';
+
+const results=[], output=document.querySelector('#result');
+function check(ok,label) {if(!ok) throw new Error(label);results.push('PASS '+label);output.textContent=results.join('\n');}
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function until(test) {for(let n=0;n<200;n++){if(test())return;await wait(20);}throw new Error('Async photo operation timed out');}
+function hand(open=[5]) {
+ const p=Array.from({length:21},()=>({x:.5,y:.8,z:0}));p[0]={x:.5,y:.9,z:0};
+ for(const [i,x] of [[5,.38],[9,.48],[13,.58],[17,.68]]) {
+  p[i]={x,y:.65,z:0};p[i+1]={x,y:.48,z:0};
+  p[i+2]={x,y:open.includes(i) ? .34:.55,z:open.includes(i) ? 0:-.06};
+  p[i+3]={x,y:open.includes(i) ? .23:.66,z:open.includes(i) ? 0:-.07};
+ }return p;
+}
+try {
+ const ya=hand([5,9]), one=hand([5]);
+ check(isYaGesture(ya) && !isOneGesture(ya),'YA recognized without index drawing');
+ check(isOneGesture(one) && !isYaGesture(one),'original index gesture remains exclusive');
+ check(!isYaGesture(hand([])) && !isYaGesture(hand([5,9,13,17])),'fist and open palm do not photograph');
+ check(isYaGesture(ya.map(p=>({x:1-p.y,y:p.x,z:p.z}))),'YA tolerates rotated hands');
+ const hold=new YaHold();
+ const tolerant=new YaHold();
+ tolerant.process(true,0,'Left');tolerant.process(true,100,'Left');
+ tolerant.process(null,170,'Left');
+ check(tolerant.process(true,240,'Left').progress===100/1500,'short missing interval pauses YA progress');
+ tolerant.process(false,300,'Left');
+ check(tolerant.since===null && tolerant.elapsed===0,'observed non-YA clears all hold progress');
+ const mirrored=ya.map(p=>({x:1-p.x,y:p.y,z:p.z}));
+ check(isYaGesture(mirrored),'YA supports mirrored hand');
+ check(isOneGesture(one.map(p=>({x:p.x*.4,y:p.y*.4,z:p.z*.4}))),'index supports smaller hands');
+ for(let t=0;t<1500;t+=100) check(!hold.process(true,t,'Left').trigger,'no early trigger at '+t);
+ check(hold.process(true,1500,'Left').trigger,'1500ms uninterrupted YA triggers');
+ check(!hold.process(true,1700,'Left').trigger,'held YA cannot repeat');
+ hold.reset();check(!hold.process(true,1900,'Left').trigger,'reset preserves release latch');
+ hold.process(false,2000);for(let t=2100;t<=3600;t+=100) hold.process(true,t,'Left');
+ check(hold.locked,'release permits another stable trigger');
+ hold.process(false,3700);hold.process(true,3800,'Left');hold.process(true,4200,'Left');
+ check(hold.since===4200,'inference gap resets stability clock');
+ hold.process(true,4300,'Right');check(hold.since===4300,'switching hands restarts hold');
+ hold.process(false,4400);check(hold.since===null,'lost gesture clears hold');
+ const pen=new GesturePen();pen.process(one,one,0);check(pen.process(one,one,70).state==='drawing','index drawing still works');
+
+
+ const wiping=new GlassWiping({wipeStrength:.5,wipeRange:.5,refogSpeed:1});
+ wiping.resize(1.6);
+ let resets=0;
+ const preview=new ArtworkPreview({mask:wiping.artworkCanvas,onResetPen:()=>{resets++;pen.reset();}});
+ const finish=document.querySelector('#finish-artwork');
+ finish.click();
+ await until(()=>preview.stage==='live');
+ check(!preview.dialog.open && preview.notice.textContent.includes('先在霧玻璃上畫下圖案'),'empty artwork does not open a preview');
+ wiping.stroke({x:.25,y:.35,time:0},{x:.75,y:.35,time:100});
+ wiping.update(40);
+ const live=wiping.ctx.getImageData(0,0,wiping.canvas.width,wiping.canvas.height).data;
+ check(!live.some((value,index)=>index%4===3 && value>0),'live glass still refogs');
+ wiping.resize(1.2);
+ finish.click();
+ await until(()=>preview.dialog.open);
+ await preview.image.decode();
+ check(preview.image.naturalWidth===wiping.canvas.width && preview.image.naturalHeight===wiping.canvas.height,'PNG follows the resized glass aspect');
+ check(preview.download.href===preview.image.src && preview.download.download.endsWith('.png'),'download shares the preview PNG');
+ const png=await (await fetch(preview.download.href)).blob();
+ check(png.type==='image/png','download has PNG MIME type');
+ const decoded=document.createElement('canvas');
+ decoded.width=preview.image.naturalWidth;decoded.height=preview.image.naturalHeight;
+ const ctx=decoded.getContext('2d');ctx.drawImage(preview.image,0,0);
+ const alpha=(x,y)=>ctx.getImageData(Math.floor(x*decoded.width),Math.floor(y*decoded.height),1,1).data;
+ check(alpha(.02,.02)[3]===0 && alpha(.5,.65)[3]===0,'unwiped pixels are fully transparent');
+ const stroke=alpha(.5,.3875);
+ check(stroke[3]>0 && stroke[0]===255 && stroke[1]===255 && stroke[2]===255,'white artwork survives refogging and resize on the correct side');
+ preview.retake.click();
+ check(!preview.dialog.open && !preview.download.hasAttribute('href'),'return closes preview and releases the PNG link');
+ wiping.resize(1.6);
+ const original=wiping.artworkCtx.getImageData(0,0,wiping.artworkCanvas.width,wiping.artworkCanvas.height);
+ const strokeLength=row=>original.data.filter((value,index)=>index%4===3 && value>100 &&
+  Math.floor(index/(4*original.width))===row).length;
+ check(strokeLength(Math.floor(original.height*.35))>original.width*.45,'rotating back restores stroke length');
+ const dot=new GlassWiping(wiping.parameters);
+ dot.resize(2);
+ dot.stroke({x:.92,y:.12,time:0},{x:.92,y:.12,time:0});
+ dot.resize(.5);
+ const {width,height}=dot.artworkCanvas;
+ const rotated=dot.artworkCtx.getImageData(0,0,width,height).data;
+ const pixels=[];
+ for(let i=3;i<rotated.length;i+=4) if(rotated[i]>10) pixels.push([(i>>2)%width,Math.floor((i>>2)/width)]);
+ check(pixels.length>0 && pixels.every(([x,y])=>x>0&&x<width-1&&y>0&&y<height-1),'an edge stroke remains entirely inside the rotated PNG');
+ const span=axis=>Math.max(...pixels.map(point=>point[axis]))-Math.min(...pixels.map(point=>point[axis]))+1;
+ check(Math.abs(span(0)-span(1))<=2,'rotation scales horizontal and vertical dimensions uniformly');
+
+ const data=t=>({landmarks:ya,world:ya,timestamp:t,hand:'Left'});
+ for(let t=0;t<=1500;t+=100)preview.observe(data(t),true);
+ check(preview.blocksDrawing && resets>0 && preview.countdown.textContent==='3','YA starts the existing countdown and blocks drawing');
+ preview.update(preview.deadline-1900,true);
+ check(preview.countdown.textContent==='2','YA countdown continues');
+ preview.update(preview.deadline,true);
+ await until(()=>preview.dialog.open);
+ check(preview.download.href.startsWith('blob:'),'YA finishes and opens the same downloadable preview');
+ preview.retry();
+ preview.observe(data(5000),true);
+ check(preview.stage==='live' && preview.hold.locked,'holding YA cannot immediately retrigger');
+ preview.observe({landmarks:one,world:one,timestamp:5100,hand:'Left'},true);
+ for(let t=5200;t<=6700;t+=100)preview.observe(data(t),true);
+ preview.update(preview.deadline,false);
+ check(preview.stage==='live' && preview.countdown.hidden,'camera loss cancels the YA countdown');
+ wiping.reset();
+ check(!wiping.artworkCtx.getImageData(0,0,wiping.artworkCanvas.width,wiping.artworkCanvas.height).data.some(Boolean),'reset clears the artwork mask');
+ output.textContent=results.join('\n')+'\nALL CHECKS PASSED';
+}catch(error){output.textContent=results.join('\n')+'\nFAIL '+error.stack;}
+</script>
