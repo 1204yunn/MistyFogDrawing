@@ -3,7 +3,14 @@
 <button id="finish-artwork">完成作品</button>
 <div id="photo-countdown" hidden></div>
 <p id="photo-notice"></p>
-<dialog id="photo-preview"><img id="photo-image" alt=""><button id="photo-retake">返回繪畫</button><a id="artwork-download" download="misty-artwork.png">下載圖片</a></dialog>
+<dialog id="photo-preview">
+  <img id="photo-image" alt="">
+  <input id="artwork-consent" type="checkbox">
+  <p id="artwork-consent-status" role="status"></p>
+  <button id="photo-retake">返回繪畫</button>
+  <button id="artwork-submit" disabled>同意並留下作品</button>
+  <a id="artwork-download" download="misty-artwork.png">僅下載我的作品</a>
+</dialog>
 <script type="module">
 import { isYaGesture, isOneGesture, YaHold, GesturePen } from '../gestures.js';
 import { ArtworkPreview } from '../photo.js';
@@ -70,6 +77,15 @@ try {
  check(preview.download.href===preview.image.src && preview.download.download.endsWith('.png'),'download shares the preview PNG');
  const png=await (await fetch(preview.download.href)).blob();
  check(png.type==='image/png','download has PNG MIME type');
+ check(!preview.consent.checked && preview.submit.disabled && preview.artworkForUpload===null,'downloadable PNG starts without upload consent');
+ preview.consent.click();
+ check(!preview.submit.disabled && preview.artworkForUpload===null,'checking the box alone does not select an artwork for upload');
+ preview.submit.click();
+ check(preview.artworkForUpload?.type==='image/png' && preview.consentStatus.textContent.includes('尚未開放作品收錄'),'confirming consent makes the active PNG eligible without reporting a submission');
+ preview.consent.click();
+ check(preview.submit.disabled && preview.artworkForUpload===null,'unchecking revokes upload eligibility');
+ preview.consent.click();
+ preview.submit.click();
  const decoded=document.createElement('canvas');
  decoded.width=preview.image.naturalWidth;decoded.height=preview.image.naturalHeight;
  const ctx=decoded.getContext('2d');ctx.drawImage(preview.image,0,0);
@@ -104,6 +120,7 @@ try {
  preview.update(preview.deadline,true);
  await until(()=>preview.dialog.open);
  check(preview.download.href.startsWith('blob:'),'YA finishes and opens the same downloadable preview');
+ check(!preview.consent.checked && preview.submit.disabled && preview.artworkForUpload===null,'each new preview starts without consent');
  preview.retry();
  preview.observe(data(5000),true);
  check(preview.stage==='live' && preview.hold.locked,'holding YA cannot immediately retrigger');

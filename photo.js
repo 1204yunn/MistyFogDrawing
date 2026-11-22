@@ -26,6 +26,20 @@ export class ArtworkPreview {
     this.notice=document.querySelector('#photo-notice');
     this.retake=document.querySelector('#photo-retake');
     this.download=document.querySelector('#artwork-download');
+    this.consent = document.querySelector('#artwork-consent');
+    this.submit = document.querySelector('#artwork-submit');
+    this.consentStatus = document.querySelector('#artwork-consent-status');
+    this.resetConsent();
+    this.consent.addEventListener('change', () => {
+      this.consentedArtwork = null;
+      this.consentStatus.textContent = '';
+      this.submit.disabled = !this.consent.checked;
+    });
+    this.submit.addEventListener('click', () => {
+      if (this.stage !== 'preview' || !this.dialog.open || !this.consent.checked || !this.artworkBlob) return;
+      this.consentedArtwork = this.artworkBlob;
+      this.consentStatus.textContent = '已在此預覽確認同意，目前尚未開放作品收錄。';
+    });
     this.retake.addEventListener('click',()=>this.retry());
     document.querySelector('#finish-artwork').addEventListener('click',()=>this.finish());
     this.dialog.addEventListener('cancel', event=> { event.preventDefault(); this.retry(); });
@@ -33,6 +47,16 @@ export class ArtworkPreview {
     window.addEventListener('pagehide',()=>this.retry());
   }
   get blocksDrawing() { return this.holding || this.stage!=='live'; }
+  // A future upload must use the explicitly confirmed PNG from the active preview.
+  get artworkForUpload() {
+    return this.stage === 'preview' && this.dialog.open && this.consent.checked ? this.consentedArtwork : null;
+  }
+  resetConsent() {
+    this.consent.checked = false;
+    this.submit.disabled = true;
+    this.consentedArtwork = null;
+    this.consentStatus.textContent = '';
+  }
   observe(data, ready) {
     const ya=data.landmarks ? isYaGesture(data.world || data.landmarks) : null;
     // A release still unlocks the gesture during preview.
@@ -85,6 +109,8 @@ export class ArtworkPreview {
         this.stage='live'; this.notice.textContent='先在霧玻璃上畫下圖案，再完成作品。';
         return;
       }
+      this.resetConsent();
+      this.artworkBlob = blob;
       this.imageUrl=URL.createObjectURL(blob);
       this.image.src=this.download.href=this.imageUrl;
       this.notice.textContent='';
@@ -97,6 +123,8 @@ export class ArtworkPreview {
     }
   }
   releaseImage() {
+    this.resetConsent();
+    this.artworkBlob = null;
     if(this.imageUrl) URL.revokeObjectURL(this.imageUrl);
     this.imageUrl=null; this.image.removeAttribute('src');
     this.download.removeAttribute('href');

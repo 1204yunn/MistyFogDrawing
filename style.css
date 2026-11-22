@@ -76,10 +76,28 @@ button, #artwork-download { touch-action: manipulation; }
   display: block; max-width: 100%; max-height: 62vh; max-height: 62dvh; width: auto; height: auto; margin: auto; object-fit: contain;
   background: repeating-conic-gradient(#59717e 0% 25%, #6a828f 0% 50%) 0 0 / 20px 20px;
 }
-#photo-message { font-size: 12px; line-height: 1.8; }
+.artwork-consent {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px; border: 1px solid #55768644; border-radius: 8px;
+  background: #c5d8df55; font-size: 13px; line-height: 1.6; cursor: pointer;
+}
+.artwork-consent input {
+  flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: #355f76;
+}
+#artwork-consent-status { margin: 0; font-size: 12px; line-height: 1.6; }
+#artwork-consent-status:not(:empty) { margin-top: 8px; }
 .photo-preview button { background: #c5d8df80; }
-#artwork-download { display: grid; place-items: center; color: #fff; background: #355f76; text-decoration: none; }
-#artwork-download:hover { background: #294f64; }
+.photo-preview .actions > * { padding: 4px 8px; font-size: 13px; text-align: center; }
+#artwork-download { display: grid; place-items: center; text-decoration: none; background: #ffffff70; }
+#artwork-submit:not(:disabled) { background: #355f76; color: #fff; }
+#artwork-submit:disabled { color: #49606b; cursor: default; }
+#artwork-submit:not(:disabled):hover { background: #294f64; }
+#artwork-download:hover { background: #fff; }
+@media (max-width: 420px) {
+  .photo-preview .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #photo-retake { grid-column: 1 / -1; }
+}
 @media (max-width:600px) {
   .photo-preview { padding: 14px; }
   .gesture-hint { font-size: 10px; }
@@ -123,7 +141,7 @@ button, #artwork-download { touch-action: manipulation; }
 @media (max-height: 500px) and (any-pointer: coarse) {
   .photo-preview { padding: 14px; }
   .photo-preview h2 { margin-bottom: 8px; }
-  .photo-preview .actions, #photo-message { margin: 6px 0 0; }
+  .photo-preview .actions, .artwork-consent { margin: 6px 0 0; }
   #photo-image {
     max-height: calc(90vh - 150px);
     max-height: min(calc(90dvh - 150px), calc(100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom)) - 150px));
