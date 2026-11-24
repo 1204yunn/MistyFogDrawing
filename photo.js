@@ -1,4 +1,6 @@
 import { isYaGesture, YaHold } from './gestures.js';
+import { uploadConfig } from './upload-config.js';
+import { uploadArtwork } from './artwork-upload.js';
 
 export function captureArtwork(mask) {
   const pixels = mask.getContext('2d').getImageData(0, 0, mask.width, mask.height).data;
@@ -17,8 +19,11 @@ export function captureArtwork(mask) {
 }
 
 export class ArtworkPreview {
-  constructor({ onResetPen, mask }) {
+  constructor({ onResetPen, mask, upload = uploadArtwork, config = uploadConfig }) {
     this.onResetPen=onResetPen; this.mask=mask;
+    this.upload = upload;
+    this.uploadConfig = config;
+    this.uploadAvailable = config.uploadEnabled === true && Boolean(config.turnstileSiteKey.trim());
     this.hold=new YaHold(); this.stage='live'; this.holding=false; this.generation=0;
     this.countdown=document.querySelector('#photo-countdown');
     this.dialog=document.querySelector('#photo-preview');
@@ -29,17 +34,15 @@ export class ArtworkPreview {
     this.consent = document.querySelector('#artwork-consent');
     this.submit = document.querySelector('#artwork-submit');
     this.consentStatus = document.querySelector('#artwork-consent-status');
+    this.turnstileContainer = document.querySelector('#artwork-turnstile');
+    document.querySelector('#artwork-upload-note').hidden = this.uploadAvailable;
     this.resetConsent();
     this.consent.addEventListener('change', () => {
-      this.consentedArtwork = null;
+      if (this.uploadState !== 'ready') return;
       this.consentStatus.textContent = '';
-      this.submit.disabled = !this.consent.checked;
+      this.submit.disabled = !this.uploadAvailable || !this.consent.checked;
     });
-    this.submit.addEventListener('click', () => {
-      if (this.stage !== 'preview' || !this.dialog.open || !this.consent.checked || !this.artworkBlob) return;
-      this.consentedArtwork = this.artworkBlob;
-      this.consentStatus.textContent = '已在此預覽確認同意，目前尚未開放作品收錄。';
-    });
+    this.submit.addEventListener('click', () => this.submitArtwork());
     this.retake.addEventListener('click',()=>this.retry());
     document.querySelector('#finish-artwork').addEventListener('click',()=>this.finish());
     this.dialog.addEventListener('cancel', event=> { event.preventDefault(); this.retry(); });
@@ -47,14 +50,52 @@ export class ArtworkPreview {
     window.addEventListener('pagehide',()=>this.retry());
   }
   get blocksDrawing() { return this.holding || this.stage!=='live'; }
-  // A future upload must use the explicitly confirmed PNG from the active preview.
-  get artworkForUpload() {
-    return this.stage === 'preview' && this.dialog.open && this.consent.checked ? this.consentedArtwork : null;
+  async submitArtwork() {
+    if (!this.uploadAvailable || this.stage !== 'preview' || !this.dialog.open || !this.consent.checked ||
+        !this.artworkBlob || this.uploadState !== 'ready') return;
+    if (this.artworkBlob.size > 2 * 1024 * 1024) {
+      this.consentStatus.textContent = '作品超過 2 MiB 上傳限制，仍可下載透明 PNG。';
+      return;
+    }
+    const generation = this.generation;
+    const submissionId = this.submissionId ??= crypto.randomUUID();
+    this.uploadAttempt = new AbortController();
+    this.uploadState = 'uploading';
+    this.consent.disabled = this.submit.disabled = true;
+    this.consentStatus.textContent = '正在進行人機驗證…';
+    try {
+      const receipt = await this.upload({
+        blob: this.artworkBlob,
+        submissionId,
+        container: this.turnstileContainer,
+        config: this.uploadConfig,
+        signal: this.uploadAttempt.signal,
+        onVerified: () => {
+          if (generation === this.generation) this.consentStatus.textContent = '正在等待雲端儲存確認…';
+        },
+      });
+      if (generation !== this.generation) return;
+      if (receipt?.ok !== true || receipt.submissionId !== submissionId ||
+          typeof receipt.fileId !== 'string' || !/^[\w-]+$/.test(receipt.fileId)) {
+        throw new Error('Invalid Drive receipt');
+      }
+      this.uploadState = 'complete';
+      this.consentStatus.textContent = '你的濕痕已經留下';
+    } catch {
+      if (generation !== this.generation) return;
+      this.uploadState = 'ready';
+      this.consent.disabled = false;
+      this.submit.disabled = !this.consent.checked;
+      this.consentStatus.textContent = '未能確認上傳，作品仍在。請再按一次「同意並上傳」。';
+    } finally {
+      if (generation === this.generation) this.uploadAttempt = null;
+    }
   }
   resetConsent() {
+    this.uploadState = 'ready';
     this.consent.checked = false;
+    this.consent.disabled = !this.uploadAvailable;
     this.submit.disabled = true;
-    this.consentedArtwork = null;
     this.consentStatus.textContent = '';
   }
   observe(data, ready) {
@@ -123,6 +164,9 @@ export class ArtworkPreview {
     }
   }
   releaseImage() {
+    this.uploadAttempt?.abort();
+    this.uploadAttempt = null;
+    this.submissionId = null;
     this.resetConsent();
     this.artworkBlob = null;
     if(this.imageUrl) URL.revokeObjectURL(this.imageUrl);

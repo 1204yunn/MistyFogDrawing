@@ -16,7 +16,8 @@
   <div class="bottom-note">GLASS STUDY <span>01 — CONDENSATION</span></div>
   <aside class="gesture-tools" aria-label="手勢繪畫控制">
     <div class="actions"><button id="camera-toggle" type="button" aria-pressed="false">啟動攝影機</button><button id="clear-strokes" type="button">重新繪畫</button><button id="finish-artwork" type="button">完成作品</button></div>
-    <p id="gesture-status" role="status" aria-live="polite" data-state="missing">未偵測 · 攝影機未啟動</p>
+    <p id="gesture-status" role="status" aria-live="polite" data-state="idle">攝影機未啟動</p>
+    <small id="gesture-debug" hidden></small>
     <p class="gesture-hint">☝ 擦拭霧氣　✌ 完成作品</p>
     <p class="hint">伸直食指、收起中指／無名指／小指。<br>也可用滑鼠拖曳；影像僅在此裝置辨識。</p>
   </aside>
@@ -33,10 +34,12 @@
       <input id="artwork-consent" type="checkbox" autocomplete="off">
       <span>我同意將此次創作提供予《有點濕濕的》畢業專題，用於展覽展示、作品紀錄及相關成果發表。</span>
     </label>
+    <p id="artwork-upload-note" class="artwork-test-note">雲端上傳尚未開放，仍可下載作品。</p>
+    <div id="artwork-turnstile" hidden></div>
     <p id="artwork-consent-status" role="status"></p>
     <div class="actions">
       <button id="photo-retake" type="button">返回繪畫</button>
-      <button id="artwork-submit" type="button" disabled>同意並留下作品</button>
+      <button id="artwork-submit" type="button" disabled>同意並上傳</button>
       <a id="artwork-download" download="misty-artwork.png">僅下載我的作品</a>
     </div>
   </dialog>
