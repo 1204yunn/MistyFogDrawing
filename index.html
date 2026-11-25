@@ -15,32 +15,44 @@
   <header class="identity"><span class="eyebrow">MISTY WATER LAB / EXPERIMENT 01</span><h1><img class="brand-logo" src="./assets/logo.png" width="1754" height="1241" alt="有點濕濕的" decoding="async"></h1></header>
   <div class="bottom-note">GLASS STUDY <span>01 — CONDENSATION</span></div>
   <aside class="gesture-tools" aria-label="手勢繪畫控制">
-    <div class="actions"><button id="camera-toggle" type="button" aria-pressed="false">啟動攝影機</button><button id="clear-strokes" type="button">重新繪畫</button><button id="finish-artwork" type="button">完成作品</button></div>
-    <p id="gesture-status" role="status" aria-live="polite" data-state="idle">攝影機未啟動</p>
+    <div class="actions"><button id="camera-toggle" type="button" aria-pressed="false" disabled>啟動攝影機</button><button id="clear-strokes" type="button" disabled>重新繪畫</button><button id="finish-artwork" type="button" disabled>完成作品</button></div>
+    <p id="gesture-status" role="status" aria-live="polite" data-state="idle" hidden>攝影機未啟動</p>
     <small id="gesture-debug" hidden></small>
-    <p class="gesture-hint">☝ 擦拭霧氣　✌ 完成作品</p>
-    <p class="hint">伸直食指、收起中指／無名指／小指。<br>也可用滑鼠拖曳；影像僅在此裝置辨識。</p>
+    <small id="gesture-draw-debug" hidden></small>
+    <button id="hand-load-test" type="button" aria-pressed="false" hidden>低動畫負載測試</button>
+    <small id="hand-load-stats" hidden></small>
+    <button id="camera-ab-toggle" type="button" aria-pressed="true" hidden>切換至 A：原有合成排程</button>
+    <small id="camera-ab-stats" hidden></small>
   </aside>
   <audio id="ambient-rain" src="./assets/misty_soft_rain_ambient.mp3" loop preload="none"></audio>
   <button id="sound-toggle" class="sound-toggle" type="button" aria-label="播放雨聲" aria-pressed="false" title="播放雨聲"><span aria-hidden="true">♪</span></button>
   <script type="module" src="./audio.js"></script>
   <div id="gesture-cursor" hidden aria-hidden="true"></div>
-  <div id="photo-countdown" class="photo-countdown" role="status" aria-live="assertive" hidden></div>
   <p id="photo-notice" class="photo-notice" role="status" aria-live="polite"></p>
+  <dialog id="participation" class="photo-preview participation" aria-labelledby="participation-title">
+    <h2 id="participation-title">留下你的濕痕</h2>
+    <p>開啟攝影機，用滑鼠或手指擦開霧氣，也可以伸出食指，在空中留下屬於你的痕跡！</p>
+    <p>我同意將此次創作提供予《有點濕濕的》畢業專題，用於展覽展示、作品紀錄及相關成果發表。</p>
+    <form id="participation-form">
+      <label class="artwork-consent">
+        <input id="participation-consent" type="checkbox" autocomplete="off" required>
+        <span>我已閱讀並同意以上作品儲存與展場展示方式。</span>
+      </label>
+      <button id="participation-start" type="submit" disabled>開始留下</button>
+    </form>
+  </dialog>
   <dialog id="photo-preview" class="photo-preview" aria-labelledby="photo-title">
     <h2 id="photo-title">作品預覽</h2>
-    <img id="photo-image" alt="擦拭霧氣形成的圖案">
-    <label class="artwork-consent">
-      <input id="artwork-consent" type="checkbox" autocomplete="off">
-      <span>我同意將此次創作提供予《有點濕濕的》畢業專題，用於展覽展示、作品紀錄及相關成果發表。</span>
-    </label>
-    <p id="artwork-upload-note" class="artwork-test-note">雲端上傳尚未開放，仍可下載作品。</p>
+    <img id="photo-image" alt="霧玻璃合成圖片" hidden>
+    <p id="artwork-upload-note" class="artwork-test-note">雲端上傳尚未開放。</p>
     <div id="artwork-turnstile" hidden></div>
     <p id="artwork-consent-status" role="status"></p>
+    <p id="photo-download-status" role="status"></p>
     <div class="actions">
-      <button id="photo-retake" type="button">返回繪畫</button>
-      <button id="artwork-submit" type="button" disabled>同意並上傳</button>
-      <a id="artwork-download" download="misty-artwork.png">僅下載我的作品</a>
+      <button id="photo-retake" type="button">返回修改</button>
+      <button id="portrait-download" type="button" disabled>下載合照</button>
+      <button id="artwork-download" type="button" disabled>下載透明作品 PNG</button>
+      <button id="artwork-submit" type="button" disabled>確認上傳</button>
     </div>
   </dialog>
   <p id="status" role="status">正在凝結…</p>

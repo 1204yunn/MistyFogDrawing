@@ -7,10 +7,8 @@ canvas { display: block; width: 100%; height: 100%; }
 #experiment canvas { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .gesture-tools { position: fixed; z-index: 2; top: max(20px, env(safe-area-inset-top)); right: 28px; width: 250px; padding: 12px 14px; border: 1px solid #ffffff70; border-radius: 12px; background: #edf5f4dd; }
 .gesture-tools .actions { margin-top: 0; }
-.gesture-tools > p:not(#gesture-status) { display: none; }
 #gesture-status { font-size: 12px; margin: 10px 0 0; line-height: 1.5; }
 #gesture-status[data-state=drawing] { color: #465967; font-weight: 600; }
-#gesture-status[data-state=ya]::before { content: ''; display: inline-block; width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; border-radius: 50%; background: conic-gradient(#72818e var(--ya-progress,0deg),#72818e22 0); mask: radial-gradient(circle,transparent 48%,#000 53%); }
 #gesture-cursor { position: fixed; top: 0; left: 0; width: 14px; height: 14px; margin: -7px; border: 1px solid #e0eeee; border-radius: 50%; box-shadow: 0 0 0 2px #29485b88; pointer-events: none; z-index: 1; }
 .bottom-note { pointer-events: none; }
 .identity { position: fixed; top: max(40px, env(safe-area-inset-top)); left: 5vw; z-index: 1; pointer-events: none; }
@@ -22,9 +20,9 @@ h1 { margin: 27px 0 0; font-size: clamp(24px, 3.6vw, 51.2px); font-weight: 400; 
 .bottom-note { position: fixed; bottom: max(30px, env(safe-area-inset-bottom)); left: 5vw; font-size: 9px; letter-spacing: .18em; }
 .bottom-note span { margin-left: 24px; opacity: .6; }
 .actions { display: flex; gap: 8px; margin-top: 12px; }
-button, #artwork-download { min-height: 36px; flex: 1; border: 1px solid #55768644; border-radius: 5px; background: #ffffff36; color: inherit; cursor: pointer; font: inherit; font-size: 11px; }
+button { min-height: 36px; flex: 1; border: 1px solid #55768644; border-radius: 5px; background: #ffffff36; color: inherit; cursor: pointer; font: inherit; font-size: 11px; }
 button:hover { background: #ffffff80; }
-button, #artwork-download { touch-action: manipulation; }
+button { touch-action: manipulation; }
 :focus-visible { outline: 2px solid #355f76; outline-offset: 3px; }
 .hint { font-size: 10px; line-height: 1.8; opacity: .6; margin-bottom: 0; }
 #status { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 85vw; padding: 18px 24px; border-radius: 8px; background: #edf5f4e6; font-size: 13px; line-height: 1.8; }
@@ -46,14 +44,6 @@ button, #artwork-download { touch-action: manipulation; }
   background: #87acbe99; opacity: .9;
   box-shadow: 0 0 0 2px #a8c1cc33;
 }
-.gesture-hint { font-size: 11px; line-height: 1.8; opacity: .75; margin: 9px 0 0; }
-.photo-countdown {
-  position: fixed; inset: 0; z-index: 4; pointer-events: none;
-  display: grid; place-items: center;
-  font-size: clamp(80px, 16vw, 160px); font-weight: 300;
-  color: #edf5f0b8; text-shadow: 0 2px 25px #36556533;
-}
-.photo-countdown[hidden] { display: none; }
 .photo-notice {
   position: fixed; z-index: 4; bottom: max(28px, env(safe-area-inset-bottom));
   left: 50%; transform: translateX(-50%); width: min(70vw, 460px);
@@ -72,10 +62,21 @@ button, #artwork-download { touch-action: manipulation; }
 }
 .photo-preview::backdrop { background: #4d697573; backdrop-filter: blur(6px); }
 .photo-preview h2 { margin: 0 0 14px; font-size: 18px; font-weight: 400; }
+.participation { width: 420px; }
+.participation p { margin: 0 0 10px; font-size: 14px; line-height: 1.65; }
+#participation-start { display: block; margin: 14px auto 0; min-height: 44px; }
+#participation-start:not(:disabled) { background: #355f76; color: #fff; }
+#gesture-debug, #gesture-draw-debug { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+#gesture-draw-debug:not([hidden]) { display: block; margin-top: 4px; }
+#hand-load-test:not([hidden]), #hand-load-stats:not([hidden]) { display: block; margin-top: 4px; }
+#hand-load-stats { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+#camera-ab-toggle:not([hidden]), #camera-ab-stats:not([hidden]) { display: block; margin-top: 4px; }
+#camera-ab-stats { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 #photo-image {
   display: block; max-width: 100%; max-height: 62vh; max-height: 62dvh; width: auto; height: auto; margin: auto; object-fit: contain;
   background: repeating-conic-gradient(#59717e 0% 25%, #6a828f 0% 50%) 0 0 / 20px 20px;
 }
+#photo-image[hidden] { display: none; }
 .artwork-consent {
   display: flex; align-items: flex-start; gap: 10px;
   margin-top: 12px;
@@ -85,22 +86,20 @@ button, #artwork-download { touch-action: manipulation; }
 .artwork-consent input {
   flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: #355f76;
 }
-#artwork-consent-status { margin: 0; font-size: 12px; line-height: 1.6; }
-#artwork-consent-status:not(:empty) { margin-top: 8px; }
+#artwork-consent-status, #photo-download-status { margin: 0; font-size: 12px; line-height: 1.6; }
+.artwork-test-note { margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
+#artwork-turnstile:not([hidden]) { margin-top: 8px; }
+#artwork-consent-status:not(:empty), #photo-download-status:not(:empty) { margin-top: 8px; }
 .photo-preview button { background: #c5d8df80; }
 .photo-preview .actions > * { padding: 4px 8px; font-size: 13px; text-align: center; }
-#artwork-download { display: grid; place-items: center; text-decoration: none; background: #ffffff70; }
 #artwork-submit:not(:disabled) { background: #355f76; color: #fff; }
 #artwork-submit:disabled { color: #49606b; cursor: default; }
 #artwork-submit:not(:disabled):hover { background: #294f64; }
-#artwork-download:hover { background: #fff; }
 @media (max-width: 420px) {
   .photo-preview .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #photo-retake { grid-column: 1 / -1; }
 }
 @media (max-width:600px) {
   .photo-preview { padding: 14px; }
-  .gesture-hint { font-size: 10px; }
   .photo-notice { bottom: max(20px, env(safe-area-inset-bottom)); font-size: 11px; width: 65vw; }
 }
 
@@ -122,7 +121,7 @@ button, #artwork-download { touch-action: manipulation; }
 @media (any-pointer: coarse) {
   #experiment { bottom: auto; height: 100vh; height: 100dvh; }
   .gesture-tools { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
-  .gesture-tools button, .photo-preview button, #artwork-download, .sound-toggle { min-height: 44px; }
+  .gesture-tools button, .photo-preview button, .sound-toggle { min-height: 44px; }
   .sound-toggle { width: 44px; height: 44px; right: max(12px, env(safe-area-inset-right)); }
   .photo-preview { max-width: min(92vw, calc(100vw - max(12px, env(safe-area-inset-left)) - max(12px, env(safe-area-inset-right)))); }
 }

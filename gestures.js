@@ -17,7 +17,7 @@ function angle(a,b,c) {
   const length = Math.hypot(...u)*Math.hypot(...v);
   return length > 1e-8 ? Math.acos(Math.max(-1,Math.min(1,u.reduce((s,n,i)=>s+n*v[i],0)/length)))*180/Math.PI : 0;
 }
-function fingerPose(points, ya = false) {
+function matchesPose(points, ya=false) {
   if (!points || points.length!==21 || points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)||!Number.isFinite(p.z??0))) return false;
   const palm = (distance(points[0],points[9])+distance(points[5],points[17]))/2;
   if (palm<1e-6) return false;
@@ -34,69 +34,100 @@ function fingerPose(points, ya = false) {
     return !extended(m,p,d,t) && (angle(points[m],points[p],points[d])<155 || reach<.82)
       && distance(points[0],points[t])<distance(points[0],points[p])+palm*.3;
   };
+  if (ya) return extended(5,6,7,8) && extended(9,10,11,12)
+    && folded(13,14,15,16) && folded(17,18,19,20);
+  // Drawing can use a relaxed index as long as the other fingers stay folded.
+  const indexLength = distance(points[5],points[6])+distance(points[6],points[7])+distance(points[7],points[8]);
+  const pointing = angle(points[5],points[6],points[7])>125 &&
+    angle(points[6],points[7],points[8])>115 &&
+    distance(points[5],points[8])/Math.max(indexLength,1e-8)>.79 &&
+    distance(points[0],points[8])>distance(points[0],points[5])+palm*.30;
   // Thumb deliberately unconstrained; the ring and little fingers must fold.
-  return extended(5,6,7,8) && (ya ? extended(9,10,11,12) : folded(9,10,11,12)) && folded(13,14,15,16) && folded(17,18,19,20);
+  return pointing && folded(9,10,11,12)
+    && folded(13,14,15,16) && folded(17,18,19,20);
 }
+export const isOneGesture = points => matchesPose(points);
+export const isYaGesture = points => matchesPose(points,true);
 
-export const isOneGesture = points => fingerPose(points);
-export const isYaGesture = points => fingerPose(points, true);
-
-// Monotonic inference timestamps, uninterrupted frames, and one trigger per pose.
 export class YaHold {
   constructor() { this.locked=false; this.reset(); }
-  reset() { this.since=null; this.last=null; this.hand=''; this.elapsed=0; this.missing=false; }
-  process(ya, time, hand='') {
-    // null means no landmarks, false means a positively observed other pose.
-    if (ya===null && Number.isFinite(time)) {
-      if (this.last!==null && time>=this.last && time-this.last<=200) {
-        this.missing=true;
-        return {active:true,trigger:false,progress:Math.min(1,this.elapsed/1500)};
-      }
-      this.reset(); return {active:false,trigger:false,progress:0};
+  reset() { this.last=null; this.hand=''; this.elapsed=0; this.missing=false; }
+  process(ya,time,hand='') {
+    if (ya===null && this.last!==null && time>=this.last && time-this.last<=200) {
+      this.missing=true;
+      return {active:true,trigger:false};
     }
     if (!ya || !Number.isFinite(time)) {
-      this.reset(); this.locked=false; return {active:false,trigger:false};
+      this.reset();
+      if (ya===false) this.locked=false;
+      return {active:false,trigger:false};
     }
     if (this.last!==null && (time<=this.last || time-this.last>250 || hand!==this.hand)) this.reset();
     if (this.last!==null && !this.missing) this.elapsed+=time-this.last;
     this.last=time; this.hand=hand; this.missing=false;
-    if (this.locked) return {active:true,trigger:false};
-    if (this.since===null) this.since=time;
-    const trigger=this.elapsed>=1500;
+    const trigger=!this.locked && this.elapsed>=1500;
     if (trigger) this.locked=true;
-    return {active:true,trigger,progress:Math.min(1,this.elapsed/1500)};
+    return {active:true,trigger};
   }
 }
 
 export class GesturePen {
-  constructor() { this.reset(); }
-  reset() { this.point=null; this.raw=null; this.validFrames=0; this.hand=''; }
-  process(landmarks,world,time,hand='') {
-    if (!landmarks && this.raw && time>=this.raw.time && time-this.raw.time<=200) {
-      // Retain smoothing briefly, but never paint or extrapolate a missing hand.
-      return {state:'missing'};
-    }
-    if (!landmarks || !isOneGesture(world || landmarks)) {
-      this.reset(); return {state:landmarks ? 'detected' : 'missing'};
+  constructor(normalGap = 250) { this.normalGap=normalGap; this.reset(); }
+  reset() {
+    this.raw=null; this.target=null; this.rendered=null;
+    this.validFrames=0; this.hand=''; this.resumeAfterLoss=false;
+  }
+  process(landmarks,world,time,hand='',imageLandmarks=landmarks,
+      poseMatches=isOneGesture(world) || isOneGesture(imageLandmarks), receivedAt=time) {
+    if (!landmarks || !poseMatches) {
+      const reason=landmarks ? 'pose' : 'tracking-loss';
+      return this.loseTracking(landmarks ? 'detected' : 'missing',reason);
     }
     const tip = landmarks[8];
-    const raw = {x:1-tip.x,y:tip.y,time}; // Mirrored front-facing camera, no second CSS flip.
-    if (raw.x<0 || raw.x>1 || raw.y<0 || raw.y>1) { this.reset(); return {state:'detected'}; }
+    const raw = {x:1-tip.x,y:tip.y,time,receivedAt}; // Mirrored front-facing camera, no second CSS flip.
+    if (!Number.isFinite(raw.x) || !Number.isFinite(raw.y) || raw.x<0 || raw.x>1 || raw.y<0 || raw.y>1) {
+      return this.loseTracking('detected','outside');
+    }
     const gap = this.raw ? time-this.raw.time : 0;
     const jump = this.raw ? Math.hypot(raw.x-this.raw.x,raw.y-this.raw.y) : 0;
-    if (this.hand!==hand || gap>250 || jump>Math.max(.14,gap/1000*2.5)) this.reset();
+    const strokeDistance = this.rendered ? Math.hypot(raw.x-this.rendered.x,raw.y-this.rendered.y) : 0;
+    const deliveryGap = this.raw ? receivedAt-this.raw.receivedAt : 0;
+    const motion = Math.max(jump,strokeDistance);
+    // Older samples may connect only across a short distance on a known hand.
+    const sparse = Math.max(gap,deliveryGap)>this.normalGap;
+    const restart = this.raw && (
+      this.hand!==hand ? 'hand-change' :
+      gap<=0 || deliveryGap<0 || Math.max(gap,deliveryGap)>750 ? 'sample-gap' :
+      motion>.14 || jump>.025+2*gap/1000 ? 'position-jump' :
+      sparse && !hand ? 'uncertain-hand' :
+      sparse && motion>.065 ? 'sparse-motion' : ''
+    );
+    const resume=this.resumeAfterLoss;
+    if (restart) this.reset();
+    this.resumeAfterLoss=false;
     this.hand=hand; this.raw=raw; this.validFrames++;
-    if (this.validFrames<2) { this.point=raw; return {state:'detected'}; }
-    const previous = this.point;
-    const dt = Math.max(.008,(time-previous.time)/1000);
-    const motion = Math.hypot(raw.x-previous.x,raw.y-previous.y);
-    const alpha = 1-Math.exp(-dt*(motion>.025 ? 22 : 10));
-    const next = {x:previous.x+(raw.x-previous.x)*alpha,y:previous.y+(raw.y-previous.y)*alpha,time};
-    // Small dead band rejects stationary finger jitter; don't repaint a growing blob.
-    if (Math.hypot(next.x-previous.x,next.y-previous.y)<.0018) {
-      this.point={...previous,time}; return {state:'drawing',point:this.point};
+    // A restart clears the old anchor, but this valid sample can already make a dot.
+    if (this.validFrames<2 && !restart && !resume) return {state:'detected',reason:'stabilizing'};
+    if (!this.target || Math.hypot(raw.x-this.target.x,raw.y-this.target.y)>=.0018) {
+      this.target=raw;
+      return {state:'drawing',point:raw,reason:restart || undefined,rejected:restart || undefined};
     }
-    this.point=next;
-    return {state:'drawing',point:next,from:this.validFrames===2 ? next : previous};
+    return {state:'drawing',point:this.target,reason:'stationary'};
+  }
+  loseTracking(state,reason) {
+    const hadAnchor=Boolean(this.target);
+    const resume=hadAnchor || this.resumeAfterLoss;
+    this.reset();
+    this.resumeAfterLoss=resume;
+    return {state,reason,rejected:hadAnchor ? reason : undefined};
+  }
+  advance(now) {
+    if (!this.target || this.rendered?.time===this.target.time) return null;
+    const last=this.rendered;
+    // GlassWiping fills the entire segment, just as it does for mouse input.
+    const point=this.target;
+    if (now<point.receivedAt) return null;
+    this.rendered=point;
+    return {from:last || point,point};
   }
 }

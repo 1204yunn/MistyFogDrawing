@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { SlidingWater } from './water.js';
 import { CondensationRegions } from './condensation.js';
 import { GlassWiping } from './wiping.js';
-import { HandCamera } from './hand-camera.js';
-import { ArtworkPreview } from './photo.js';
-import { GesturePen, segmentCrossesRect } from './gestures.js';
+import { HandCamera, MAX_HAND_FRAME_AGE } from './hand-camera.js';
+import { ArtworkPreview, copyRenderedPhoto } from './photo.js';
+import { GesturePen, isOneGesture, segmentCrossesRect } from './gestures.js';
 
 // Fixed V2 settings shared by shader uniforms and CPU simulations.
 // slideRatio is a fraction: 20% = 0.2.
@@ -333,10 +333,33 @@ new ResizeObserver(scheduleResize).observe(host);
 resize();
 
 const glass = renderer.domElement;
+const participation = document.querySelector('#participation');
+const participationConsent = document.querySelector('#participation-consent');
+const participationStart = document.querySelector('#participation-start');
+const cameraButton = document.querySelector('#camera-toggle');
+const clearButton = document.querySelector('#clear-strokes');
+const finishButton = document.querySelector('#finish-artwork');
+let participating = false;
+const canParticipate = () => participating;
+participationConsent.checked = false;
+participationConsent.addEventListener('change', () => {
+  participationStart.disabled = !participationConsent.checked;
+});
+participation.addEventListener('cancel', event => event.preventDefault());
+document.querySelector('#participation-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (participating || !participation.open || !participationConsent.checked) return;
+  participating = true;
+  cameraButton.disabled = clearButton.disabled = finishButton.disabled = false;
+  participation.close();
+  finishButton.focus({ preventScroll: true });
+});
+participation.showModal();
+
 let pointerId = null, lastPoint = null;
 const gesturePen = new GesturePen();
 const cursor = document.querySelector('#gesture-cursor');
-const artwork = new ArtworkPreview({ mask: wiping.artworkCanvas, onResetPen: () => {
+const artwork = new ArtworkPreview({ mask: wiping.artworkCanvas, canParticipate, capturePortrait, onResetPen: () => {
   gesturePen.reset(); cursor.hidden=true; lastPoint=null;
   if (pointerId!==null) endStroke({pointerId});
 } });
@@ -378,54 +401,285 @@ function endStroke(event) {
 }
 for (const type of ['pointerup','pointercancel','lostpointercapture']) glass.addEventListener(type,endStroke);
 window.addEventListener('blur',() => { if (pointerId !== null) endStroke({pointerId}); });
+const pageOptions = new URLSearchParams(location.search);
+const handDebug = pageOptions.has('handDebug');
+const cameraAB = pageOptions.has('cameraAB');
+const drawDebug = document.querySelector('#gesture-draw-debug');
+const loadTestButton = document.querySelector('#hand-load-test');
+const loadStats = document.querySelector('#hand-load-stats');
+drawDebug.hidden = !handDebug;
+loadTestButton.hidden = !handDebug || cameraAB;
+loadStats.hidden = !handDebug;
+let lowAnimationLoad=false, loadStarted=performance.now(), lastLoadReport=0;
+let lastMeasuredCapture, loadRenderCount=0;
+const loadSamples=[];
+loadTestButton.addEventListener('click',()=> {
+  lowAnimationLoad=!lowAnimationLoad;
+  loadTestButton.setAttribute('aria-pressed',String(lowAnimationLoad));
+  loadTestButton.textContent=lowAnimationLoad ? '結束低動畫負載測試' : '低動畫負載測試';
+  loadStarted=performance.now(); lastLoadReport=0; loadRenderCount=0;
+  lastMeasuredCapture=undefined;
+  loadSamples.length=0;
+  loadStats.textContent='等待新影格以重新統計';
+});
+function reportHandLoad(data,timing) {
+  if (data.landmarks?.length===21) {
+    timing.poseMatches=classifyHandPose(data,handCamera.video.videoWidth/handCamera.video.videoHeight || 4/3);
+  }
+  if (data.timestamp<loadStarted) return;
+  const captureInterval=data.timestamp-lastMeasuredCapture;
+  const cadence=lastMeasuredCapture===undefined ? NaN : timing.cadence;
+  lastMeasuredCapture=data.timestamp;
+  loadSamples.push({inference:data.inferenceMs,capture:data.captureMs,captureInterval,cadence,age:timing.age,
+    pose:timing.poseMatches,inputAge:timing.inputAge,stage:data.type,stale:timing.stale,
+    delivery:Math.max(0,timing.receivedAt-data.timestamp-data.inferenceMs-data.captureMs)});
+  if (loadSamples.length>120) loadSamples.shift();
+  if (timing.receivedAt-lastLoadReport<1000) return;
+  lastLoadReport=timing.receivedAt;
+  const percentile=(key,p,samples)=> {
+    const values=samples.map(sample=>sample[key]).filter(Number.isFinite).sort((a,b)=>a-b);
+    return values.length ? Math.round(values[Math.ceil(values.length*p)-1]) : '—';
+  };
+  const stats=(key,samples=loadSamples)=>`${percentile(key,.5,samples)}/${percentile(key,.95,samples)}`;
+  const pointing=loadSamples.filter(sample=>sample.pose===true);
+  const otherPose=loadSamples.filter(sample=>sample.pose===false).length;
+  const expiredBefore=loadSamples.filter(sample=>sample.stage==='expired').length;
+  const expiredAfter=loadSamples.filter(sample=>sample.stage==='result' && sample.stale).length;
+  const fps=(1000*loadRenderCount/(timing.receivedAt-loadStarted)).toFixed(1);
+  loadStats.textContent=`${lowAnimationLoad ? '低負載' : '一般'}模式 · ${loadSamples.length} 筆 · 場景 ${fps} FPS · 中位數/P95（ms） · 推論 ${stats('inference')} · 擷取 ${stats('capture')} · 傳遞與等待 ${stats('delivery')} · 擷取間隔 ${stats('captureInterval')} · 回傳間隔 ${stats('cadence')} · 來源影格年齡 ${stats('age')} · 開始推論時 ${stats('inputAge')} · 原始食指符合 ${pointing.length}（其中過期 ${pointing.filter(sample=>sample.stale).length}） · 姿勢不符 ${otherPose} · 推論前／後過期 ${expiredBefore}/${expiredAfter} · 原始食指推論 ${stats('inference',pointing)}`;
+}
+function classifyHandPose(data,videoAspect) {
+  // MediaPipe normalized x and z use image width. Convert y to the same scale.
+  return Boolean(data.landmarks) && (isOneGesture(data.world) ||
+    isOneGesture(data.landmarks.map(point=>({...point,y:point.y/videoAspect}))));
+}
+let previousTip, handStrokeCalls=0, drawDebugSummary='', drawDebugTiming='';
+let handDotCalls=0, handLineCalls=0, handRejectedLines=0, lastHandBreak='—';
+let latestHandPaintFrame;
+function reportHandDrawing(tip, poseMatches, reason) {
+  if (!handDebug) return;
+  const valid=tip && Number.isFinite(tip.x) && Number.isFinite(tip.y);
+  const position=valid ? `${tip.x.toFixed(3)}, ${tip.y.toFixed(3)}` : '—';
+  const movement=valid && previousTip
+    ? Math.hypot(tip.x-previousTip.x,tip.y-previousTip.y)>.001 ? '有變動' : '無明顯變動'
+    : '等待比較';
+  previousTip=valid ? tip : undefined;
+  const pose=poseMatches===undefined ? '—' : poseMatches ? '符合' : '不符合';
+  drawDebugSummary=`食指畫布座標 ${position}（${movement}） · 姿勢 ${pose}`;
+  showHandDrawing(reason);
+}
+function showHandDrawing(reason) {
+  if (handDebug) drawDebug.textContent=`${drawDebugSummary} · 擦霧呼叫 ${handStrokeCalls} 次 · 單點 ${handDotCalls} 次 · 連線 ${handLineCalls} 次 · 拒絕連線 ${handRejectedLines} 次 · 上次原因 ${lastHandBreak} · ${reason}${drawDebugTiming}`;
+}
 const handCamera = new HandCamera({
-  button:document.querySelector('#camera-toggle'),status:document.querySelector('#gesture-status'),
-  onReset:()=> { gesturePen.reset(); cursor.hidden=true; artwork.interrupt(); },
-  onResult:data=> {
-    if (pointerId!==null) { gesturePen.reset(); cursor.hidden=true; handCamera.setStatus(data.landmarks ? 'detected' : 'missing','手動繪畫中'); return; }
-    const cameraReady=handCamera.video.readyState>=2 && handCamera.video.videoWidth>0
-      && handCamera.stream?.getVideoTracks().some(track=>track.readyState==='live');
-    if (artwork.observe(data,cameraReady)) {
-      gesturePen.reset(); cursor.hidden=true;
-      handCamera.setStatus(artwork.stage==='live' ? 'ya' : 'detected',
-        artwork.stage==='countdown' ? '完成倒數中' : artwork.stage==='preview' ? '作品預覽中' : '',artwork.progress);
-      return;
-    }
+  button:cameraButton,status:document.querySelector('#gesture-status'),canStart:canParticipate,
+  debug:handDebug ? document.querySelector('#gesture-debug') : null,
+  onTiming:reportHandLoad,
+  onReset:(reason='等待攝影機影格',stale=false)=> {
+    artwork.interruptYa();
+    if (stale) gesturePen.loseTracking('missing','stale-frame');
+    else gesturePen.reset();
+    cursor.hidden=true;
+    reportHandDrawing(null,undefined,reason);
+  },
+  onResult:(data,timing)=> {
+    const receivedAt=performance.now();
     // Match the cover crop used by mirrorUv; keep raw points for gesture classification.
     const videoAspect = handCamera.video.videoWidth/handCamera.video.videoHeight || 4/3;
-    const screenAspect = viewport.width/viewport.height;
+    if (pointerId===null && artwork.observeYa(data,videoAspect)) {
+      handCamera.setStatus('detected','YA 拍照');
+      reportHandDrawing(null,false,'YA 拍照');
+      return;
+    }
+    const glassRect = glass.getBoundingClientRect();
+    const screenAspect = glassRect.width/glassRect.height;
     const fitX = Math.min(1,screenAspect/videoAspect);
     const fitY = Math.min(1,videoAspect/screenAspect);
     const screenLandmarks = data.landmarks?.map(point=>({ ...point,
       x:(point.x-.5)/fitX+.5, y:(point.y-.5)/fitY+.5,
     }));
-    const result=gesturePen.process(screenLandmarks,data.world || data.landmarks,data.timestamp,data.hand);
-    if (result.point && blockers.some(element=>segmentCrossesRect(
-      {x:result.point.x*viewport.width,y:result.point.y*viewport.height},
-      {x:result.point.x*viewport.width,y:result.point.y*viewport.height},element.getBoundingClientRect()))) {
-      gesturePen.reset(); cursor.hidden=true; handCamera.setStatus('detected','請移到玻璃繪畫區'); return;
+    const poseMatches=timing?.poseMatches ?? classifyHandPose(data,videoAspect);
+    const index=screenLandmarks?.[8];
+    const tip=index && {x:1-index.x,y:index.y};
+    if (pointerId!==null || artwork.blocksDrawing) {
+      gesturePen.reset(); cursor.hidden=true;
+      const reason=pointerId!==null ? '滑鼠或觸控正在繪畫' : '尚未開始參與或作品預覽中';
+      handCamera.setStatus(data.landmarks ? 'detected' : 'missing',reason);
+      reportHandDrawing(tip,poseMatches,reason);
+      return;
     }
-    if (result.from && !paintStroke(result.from,result.point)) {
-      gesturePen.reset(); cursor.hidden=true; handCamera.setStatus('detected','請移到玻璃繪畫區'); return;
+    const result=gesturePen.process(screenLandmarks,data.world,data.timestamp,data.hand,undefined,poseMatches,receivedAt);
+    if (result.point?.time===data.timestamp) latestHandPaintFrame={time:data.timestamp,sourceAt:data.sourceAt ?? data.timestamp};
+    const hint = {
+      pose:'請伸直食指並收起中指、無名指、小指',
+      outside:'請把食指移到玻璃中央',
+      stabilizing:'食指已辨識，請平穩移動',
+      'hand-change':'左右手判定改變，改為單點擦霧',
+      'sample-gap':'食指座標間隔過長，改為單點擦霧',
+      'position-jump':'食指座標跳動過大，改為單點擦霧',
+      'tracking-loss':'手部遺失，連線中斷',
+      'uncertain-hand':'間隔較長且手別未確認，改為單點擦霧',
+      'sparse-motion':'間隔較長且位移過大，改為單點擦霧',
+      stationary:'移動幅度低於防抖範圍',
+    };
+    handCamera.setStatus(result.state, hint[result.reason]);
+    const reason=hint[result.reason] || (result.point ? '等待下一次畫面落筆' : '模型未回傳手部關鍵點');
+    if (result.rejected) {
+      handRejectedLines++;
+      lastHandBreak=reason;
     }
-    handCamera.setStatus(result.state);
-    cursor.hidden=!result.point;
-    if (result.point) cursor.style.transform=`translate3d(${result.point.x*viewport.width}px,${result.point.y*viewport.height}px,0)`;
+    reportHandDrawing(tip,screenLandmarks ? poseMatches : undefined,reason);
+    if (!result.point) cursor.hidden=true;
   },
 });
+
+function renderHandStroke(now) {
+  const segment=gesturePen.advance(now);
+  if (!segment) return;
+  const sourceAt=latestHandPaintFrame?.time===segment.point.time ? latestHandPaintFrame.sourceAt : segment.point.time;
+  if (now-sourceAt>MAX_HAND_FRAME_AGE) {
+    gesturePen.loseTracking('missing','stale-frame'); cursor.hidden=true;
+    showHandDrawing('落筆前影格已過期');
+    return;
+  }
+  if (!paintStroke(segment.from,segment.point)) {
+    gesturePen.reset(); cursor.hidden=true;
+    handCamera.setStatus('detected','請移到玻璃繪畫區');
+    if (segment.from!==segment.point) {
+      handRejectedLines++;
+      lastHandBreak='筆畫落在或跨過操作面板';
+    }
+    showHandDrawing('筆劃落在或跨過操作面板，已中斷');
+    return;
+  }
+  handStrokeCalls++;
+  if (segment.from===segment.point) handDotCalls++;
+  else handLineCalls++;
+  const rect=glass.getBoundingClientRect();
+  const x=rect.left+segment.point.x*rect.width;
+  const y=rect.top+segment.point.y*rect.height;
+  cursor.style.transform=`translate3d(${x}px,${y}px,0)`;
+  cursor.hidden=false;
+  return segment.point;
+}
 // VideoTexture follows the existing video; no extra getUserMedia or inference copy.
 const reflectionTexture = new THREE.VideoTexture(handCamera.video);
 reflectionTexture.minFilter = reflectionTexture.magFilter = THREE.LinearFilter;
 reflectionTexture.generateMipmaps = false;
 reflectionTexture.colorSpace = THREE.NoColorSpace; // Match the existing shader's display-space palette.
 uniforms.uCamera.value = reflectionTexture;
-document.querySelector('#clear-strokes').addEventListener('click',()=> {
+
+const cameraABToggle = document.querySelector('#camera-ab-toggle');
+const cameraABStats = document.querySelector('#camera-ab-stats');
+let cameraPriority=true, newestVideoFrame, lastRenderedVideoFrame, uploadedVideoFrame, cameraABWindow;
+function resetCameraAB(now) {
+  cameraABWindow={start:now,lastReport:now,video:{},person:{},scene:{},latencies:[],fallbackClock:false};
+}
+function recordCameraAB(path,now,count=1) {
+  if (!cameraABWindow) return;
+  const series=cameraABWindow[path];
+  if (series.last!==undefined) {
+    const gap=now-series.last;
+    series.longest=Math.max(series.longest || 0,gap);
+    if (gap>=150) series.stalls=(series.stalls || 0)+1;
+  }
+  series.last=now;
+  series.count=(series.count || 0)+count;
+}
+if (cameraAB && typeof handCamera.video.requestVideoFrameCallback==='function') {
+  cameraABToggle.hidden=cameraABStats.hidden=false;
+  resetCameraAB(performance.now());
+  cameraABToggle.addEventListener('click',()=> {
+    cameraPriority=!cameraPriority;
+    cameraABToggle.setAttribute('aria-pressed',String(cameraPriority));
+    cameraABToggle.textContent=cameraPriority ? '切換至 A：原有合成排程' : '切換至 B：人物更新優先';
+    resetCameraAB(performance.now());
+    cameraABStats.textContent='等待新的影格統計';
+  });
+  reflectionTexture.onUpdate=()=> { uploadedVideoFrame=newestVideoFrame; };
+  handCamera.video.addEventListener('playing',()=>resetCameraAB(performance.now()));
+  document.addEventListener('visibilitychange',()=>resetCameraAB(performance.now()));
+} else if (cameraAB) {
+  cameraABStats.hidden=false;
+  cameraABStats.textContent='此瀏覽器不支援攝影機影格回呼，A/B 測試無法使用。';
+}
+if (typeof handCamera.video.requestVideoFrameCallback==='function') {
+  const observeVideo=(now,metadata)=> {
+    const captureTime=metadata.captureTime;
+    const captureClock=Number.isFinite(captureTime);
+    newestVideoFrame={source:captureClock ? captureTime : metadata.presentationTime,captureClock};
+    if (cameraABWindow && !document.hidden) {
+      const series=cameraABWindow.video;
+      const presented=metadata.presentedFrames;
+      const count=Number.isFinite(presented) && Number.isFinite(series.presented) ? Math.max(1,presented-series.presented) : 1;
+      recordCameraAB('video',now,count);
+      series.presented=presented;
+    }
+    handCamera.video.requestVideoFrameCallback(observeVideo);
+  };
+  handCamera.video.requestVideoFrameCallback(observeVideo);
+  handCamera.video.addEventListener('emptied',()=> {
+    newestVideoFrame=uploadedVideoFrame=undefined;
+    if (cameraABWindow) resetCameraAB(performance.now());
+  });
+}
+
+function showCameraAB(now) {
+  const sample=cameraABWindow;
+  if (!sample || now-sample.lastReport<1000) return;
+  sample.lastReport=now;
+  const elapsed=(now-sample.start)/1000;
+  const fps=series=>((series.count || 0)/elapsed).toFixed(1);
+  const gap=series=>`${Math.round(series.longest || 0)} ms／${series.stalls || 0} 次`;
+  const latencies=sample.latencies.slice().sort((a,b)=>a-b);
+  const percentile=p=>latencies.length ? Math.round(latencies[Math.ceil(latencies.length*p)-1]) : '—';
+  const source=sample.fallbackClock ? '來源影格（含 video 提交時間）' : '攝影機來源影格';
+  cameraABStats.textContent=`${cameraPriority ? 'B 人物優先' : 'A 原排程'} · 原始 video ${fps(sample.video)} · 玻璃人物 ${fps(sample.person)} · WebGL ${fps(sample.scene)} FPS · ${source}至 WebGL 送出 ${percentile(.5)}/${percentile(.95)} ms（中位數/P95） · 最長間隔／≥150 ms 次數：video 回呼 ${gap(sample.video)}、人物 ${gap(sample.person)}、WebGL ${gap(sample.scene)}`;
+}
+
+function syncCamera() {
+  const video = handCamera.video;
+  const liveTrack = handCamera.stream?.getVideoTracks().some(track=>track.readyState==='live');
+  uniforms.uCameraReady.value = liveTrack && video.readyState >= 2 && video.videoWidth > 0 ? 1 : 0;
+  if (uniforms.uCameraReady.value) uniforms.uCameraAspect.value = video.videoWidth/video.videoHeight;
+}
+
+async function capturePortrait() {
+  const logo = document.querySelector('.brand-logo');
+  if (!logo.naturalWidth) await logo.decode();
+  const cameraActive = handCamera.stream?.getVideoTracks().some(track=>
+    track.readyState==='live' && track.enabled && !track.muted);
+  syncCamera();
+  if (!cameraActive || handCamera.video.paused) uniforms.uCameraReady.value = 0;
+  const gl = renderer.getContext();
+  if (failed || gl.isContextLost()) throw new Error('圖形畫面暫時無法擷取。');
+
+  // Use the same shader and its camera fitting. Include the saved strokes even after live refogging.
+  const liveWipe = uniforms.uWipe.value;
+  const artworkWipe = new THREE.CanvasTexture(wiping.artworkCanvas);
+  artworkWipe.minFilter = liveWipe.minFilter;
+  artworkWipe.magFilter = liveWipe.magFilter;
+  artworkWipe.generateMipmaps = false;
+  uniforms.uWipe.value = artworkWipe;
+  try {
+    if (uniforms.uCameraReady.value) reflectionTexture.needsUpdate = true;
+    renderer.render(scene,camera);
+    if (failed || gl.isContextLost()) throw new Error('圖形畫面暫時無法擷取。');
+    return copyRenderedPhoto(glass, logo);
+  } finally {
+    uniforms.uWipe.value = liveWipe;
+    artworkWipe.dispose();
+  }
+}
+
+clearButton.addEventListener('click',()=> {
+  if (!canParticipate()) return;
   artwork.retry(); wiping.reset();
   if (handCamera.running) handCamera.setStatus('missing','筆觸已清除');
 });
 window.addEventListener('blur',()=> { gesturePen.reset(); cursor.hidden=true; });
 renderer.domElement.addEventListener('webglcontextlost',event => {
-  event.preventDefault(); failed = true; artwork.interrupt();
+  event.preventDefault(); failed = true; gesturePen.reset(); cursor.hidden=true;
   status.hidden = false; status.textContent = '圖形連線暫時中斷，正在等待恢復…';
 });
 renderer.domElement.addEventListener('webglcontextrestored',() => { failed = false; status.hidden = true; viewport.width=0; scheduleResize(); });
@@ -435,6 +689,7 @@ let lastFrame = 0;
 function animate(now) {
   requestAnimationFrame(animate);
   if (document.hidden || failed) { previous = now; return; }
+  artwork.updateYa(now);
   if (resizePending) {
     resizePending=false;
     if (resize()) {
@@ -444,24 +699,50 @@ function animate(now) {
     }
   }
   // 30 fps mobile / 45 fps desktop; no expensive postprocessing or shadow maps.
-  const frameInterval = viewport.width <= 600 ? 1000/30 : 1000/45;
-  if (now-lastFrame < frameInterval) return;
-  const delta = Math.min((now-previous)/1000,.1);
-  previous = now; lastFrame = now;
-  if (!paused) uniforms.uTime.value += delta * parameters.speed;
-  if (condensation.update(viewport.width/viewport.height)) uniforms.uCondensation.value.needsUpdate = true;
-  slidingWater.update(paused ? 0 : delta * parameters.speed);
-  if (slidingWater.paint()) {
-    uniforms.uWater.value.needsUpdate = uniforms.uTracks.value.needsUpdate = true;
+  const frameInterval = lowAnimationLoad ? 125 : viewport.width <= 600 ? 1000/30 : 1000/45;
+  const animationDue = now-lastFrame >= frameInterval;
+  const cameraFrameDue = cameraPriority && !lowAnimationLoad && newestVideoFrame && newestVideoFrame!==lastRenderedVideoFrame &&
+    handCamera.video.readyState>=2 && !handCamera.video.paused;
+  // Present new hand input on the next browser frame, even between animation updates.
+  const handPoint = renderHandStroke(performance.now());
+  if (!animationDue && !handPoint && !cameraFrameDue && !(lowAnimationLoad && wiping.dirty)) return;
+  let delta = 0;
+  if (animationDue) {
+    delta = Math.min((now-previous)/1000,.1);
+    previous = now; lastFrame = now;
+    if (!lowAnimationLoad) {
+      if (!paused) uniforms.uTime.value += delta * parameters.speed;
+      if (condensation.update(viewport.width/viewport.height)) uniforms.uCondensation.value.needsUpdate = true;
+      slidingWater.update(paused ? 0 : delta * parameters.speed);
+      if (slidingWater.paint()) {
+        uniforms.uWater.value.needsUpdate = uniforms.uTracks.value.needsUpdate = true;
+      }
+    }
+    uniforms.uTouch.value *= Math.exp(-delta*2.5);
   }
-  uniforms.uTouch.value *= Math.exp(-delta*2.5);
   if (wiping.update(delta)) uniforms.uWipe.value.needsUpdate = true;
-  const video = handCamera.video;
-  const liveTrack = handCamera.stream?.getVideoTracks().some(track=>track.readyState==='live');
-  uniforms.uCameraReady.value = liveTrack && video.readyState >= 2 && video.videoWidth > 0 ? 1 : 0;
-  if (uniforms.uCameraReady.value) uniforms.uCameraAspect.value = video.videoWidth/video.videoHeight;
+  syncCamera();
+  const previousUpload=uploadedVideoFrame;
   renderer.render(scene,camera);
-  artwork.update(now,uniforms.uCameraReady.value>.5);
+  lastRenderedVideoFrame=newestVideoFrame;
+  if (cameraABWindow) {
+    const submittedAt=performance.now();
+    recordCameraAB('scene',submittedAt);
+    if (uploadedVideoFrame && uploadedVideoFrame!==previousUpload) {
+      recordCameraAB('person',submittedAt);
+      if (!uploadedVideoFrame.captureClock) cameraABWindow.fallbackClock=true;
+      const latency=Math.max(0,submittedAt-uploadedVideoFrame.source);
+      if (Number.isFinite(latency)) cameraABWindow.latencies.push(latency);
+      if (cameraABWindow.latencies.length>120) cameraABWindow.latencies.shift();
+    }
+    showCameraAB(submittedAt);
+  }
+  if (handDebug) loadRenderCount++;
+  if (handDebug && handPoint) {
+    const submittedAt=performance.now();
+    drawDebugTiming=` · 上次落筆：結果至送出畫面 ${Math.round(submittedAt-handPoint.receivedAt)} ms · 擷取至送出畫面 ${Math.round(submittedAt-handPoint.time)} ms`;
+    showHandDrawing('已呼叫擦霧');
+  }
   if (!failed) status.hidden = true;
 }
 requestAnimationFrame(animate);
